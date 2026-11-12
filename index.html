@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stokbar Cupim - Estoque de Bebidas</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+  body{font-family:Arial,sans-serif;max-width:800px;margin:0 auto;padding:16px;background:#f4f4f4}
+  h1{font-size:1.4rem}
+  form,.barra{display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;margin-bottom:12px}.barra{display:flex;flex-wrap:wrap}
+  input,select,button{padding:8px;font-size:1rem}
+  button{cursor:pointer;border:0;border-radius:4px;background:#1f6feb;color:#fff}
+  button.del{background:#c0392b;padding:4px 8px}
+  button.pdf{background:#2e7d32}button.sec{background:#555}
+  td input{width:64px;padding:4px}table{width:100%;border-collapse:collapse;background:#fff}
+  th,td{border:1px solid #ddd;padding:6px;text-align:left}
+  th{background:#1f6feb;color:#fff}
+  .baixo{color:#c0392b;font-weight:bold}
+  @media(max-width:600px){form{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<h1>🍺 Stokbar Cupim - Conferência de Estoque</h1>
+<form id="form">
+  <input id="nome" placeholder="Bebida" required>
+  <select id="categoria">
+    <option>Cerveja</option><option>Refrigerante</option><option>Água</option>
+    <option>Suco</option><option>Destilado</option><option>Vinho</option><option>Outros</option>
+  </select>
+  <input id="ideal" type="number" min="0" placeholder="Estoque ideal">
+  <button>Adicionar</button>
+</form>
+<div class="barra">
+  <button class="pdf" id="btnPdf">📄 Gerar relatório PDF</button>
+  <button class="sec" id="btnNovo">🔄 Novo turno (final → inicial)</button>
+  <button class="sec" id="btnLimpar">🧹 Zerar contagens</button>
+</div>
+<table>
+  <thead><tr><th>Bebida</th><th>Inicial</th><th>Final</th><th>Consumo</th><th>Ideal</th><th>Pedir</th><th></th></tr></thead>
+  <tbody id="lista"></tbody>
+</table>
+<p><small>Pedido sugerido = estoque ideal − estoque final (se o ideal estiver vazio, usa o estoque inicial).</small></p>
+
+<script>
+const KEY = 'stokbar-conferencia';
+let itens = JSON.parse(localStorage.getItem(KEY) || '[]');
+const num = v => (v === '' || v == null) ? null : Math.max(0, +v);
+const consumo = i => (i.inicial != null && i.final != null) ? Math.max(0, i.inicial - i.final) : null;
+const alvo = i => i.ideal != null ? i.ideal : i.inicial;
+const pedido = i => (i.final == null || alvo(i) == null) ? null : Math.max(0, alvo(i) - i.final);
+const txt = v => v == null ? '-' : v;
+
+function salvar(r = true) { localStorage.setItem(KEY, JSON.stringify(itens)); if (r) render(); }
+
+function campo(i, k) {
+  const inp = document.createElement('input');
+  inp.type = 'number'; inp.min = 0; inp.value = i[k] ?? '';
+  inp.onchange = () => { i[k] = num(inp.value); salvar(); };
+  return inp;
+}
+
+function render() {
+  const tb = document.getElementById('lista');
+  tb.innerHTML = '';
+  itens.forEach((it, n) => {
+    const tr = document.createElement('tr');
+    const nome = document.createElement('td');
+    nome.textContent = `${it.nome} (${it.categoria})`;
+    tr.appendChild(nome);
+    for (const k of ['inicial', 'final']) {
+      const td = document.createElement('td'); td.appendChild(campo(it, k)); tr.appendChild(td);
+    }
+    const c = document.createElement('td'); c.textContent = txt(consumo(it)); tr.appendChild(c);
+    const id = document.createElement('td'); id.appendChild(campo(it, 'ideal')); tr.appendChild(id);
+    const p = document.createElement('td'); p.textContent = txt(pedido(it));
+    if (pedido(it) > 0) p.className = 'baixo';
+    tr.appendChild(p);
+    const td = document.createElement('td');
+    const b = document.createElement('button');
+    b.className = 'del'; b.textContent = '✕';
+    b.onclick = () => { if (confirm('Remover ' + it.nome + '?')) { itens.splice(n, 1); salvar(); } };
+    td.appendChild(b); tr.appendChild(td);
+    tb.appendChild(tr);
+  });
+}
+
+document.getElementById('form').addEventListener('submit', e => {
+  e.preventDefault();
+  const g = id => document.getElementById(id);
+  itens.push({ nome: g('nome').value.trim(), categoria: g('categoria').value,
+               inicial: null, final: null, ideal: num(g('ideal').value) });
+  e.target.reset();
+  salvar();
+});
+document.getElementById('btnNovo').onclick = () => {
+  if (!confirm('Usar o estoque final como inicial do próximo turno?')) return;
+  itens.forEach(i => { if (i.final != null) i.inicial = i.final; i.final = null; });
+  salvar();
+};
+document.getElementById('btnLimpar').onclick = () => {
+  if (!confirm('Zerar estoque inicial e final de todas as bebidas?')) return;
+  itens.forEach(i => { i.inicial = null; i.final = null; });
+  salvar();
+};
+
+function gerarPdf() {
+  if (!window.jspdf) { alert('Biblioteca de PDF não carregada. Verifique a conexão.'); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const largura = doc.internal.pageSize.getWidth();
+  const alt = doc.internal.pageSize.getHeight();
+  const agora = new Date();
+  const data = agora.toLocaleDateString('pt-BR');
+  const hora = agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+  doc.setFontSize(18); doc.setFont(undefined, 'bold');
+  doc.text('Stokbar Cupim', largura / 2, 18, { align: 'center' });
+  doc.setFontSize(13); doc.setFont(undefined, 'normal');
+  doc.text('Relatório de Conferência de Estoque', largura / 2, 26, { align: 'center' });
+  doc.setFontSize(10);
+  doc.text(`Data: ${data}   Hora: ${hora}`, largura / 2, 33, { align: 'center' });
+  doc.setDrawColor(31, 111, 235); doc.line(14, 37, largura - 14, 37);
+
+  const soma = f => itens.reduce((s, i) => s + (f(i) || 0), 0);
+  const rodape = () => {
+    doc.setFontSize(8); doc.setTextColor(0);
+    doc.text(`Gerado em ${data} às ${hora}`, 14, alt - 8);
+    doc.text(`Página ${doc.internal.getNumberOfPages()}`, largura - 14, alt - 8, { align: 'right' });
+  };
+  const comum = {
+    theme: 'grid', margin: { left: 14, right: 14, bottom: 18 },
+    styles: { fontSize: 10, cellPadding: 2 },
+    headStyles: { fillColor: [31, 111, 235], halign: 'center' },
+    footStyles: { fillColor: [230, 230, 230], textColor: 20, fontStyle: 'bold' },
+    didDrawPage: rodape
+  };
+
+  doc.autoTable({
+    ...comum, startY: 42,
+    head: [['#', 'Bebida', 'Inicial', 'Final', 'Consumo', 'Ideal', 'Pedir']],
+    body: itens.map((it, n) => [n + 1, it.nome, txt(it.inicial), txt(it.final),
+                                txt(consumo(it)), txt(alvo(it)), txt(pedido(it))]),
+    foot: [['', 'Total', soma(i => i.inicial), soma(i => i.final), soma(consumo), '', soma(pedido)]],
+    columnStyles: {
+      0: { cellWidth: 10, halign: 'center' }, 1: { cellWidth: 'auto' },
+      2: { cellWidth: 20, halign: 'center' }, 3: { cellWidth: 20, halign: 'center' },
+      4: { cellWidth: 22, halign: 'center' }, 5: { cellWidth: 20, halign: 'center' },
+      6: { cellWidth: 20, halign: 'center' }
+    }
+  });
+
+  const pedidos = itens.filter(i => pedido(i) > 0);
+  const y = doc.lastAutoTable.finalY + 10;
+  doc.setFontSize(13); doc.setFont(undefined, 'bold');
+  if (y > alt - 40) { doc.addPage(); rodape(); }
+  const y2 = y > alt - 40 ? 20 : y;
+  doc.text('Pedido sugerido', 14, y2);
+  doc.setFont(undefined, 'normal');
+  if (!pedidos.length) {
+    doc.setFontSize(10); doc.text('Nenhum pedido necessário.', 14, y2 + 7);
+  } else {
+    doc.autoTable({
+      ...comum, startY: y2 + 4,
+      head: [['Bebida', 'Categoria', 'Quantidade a pedir']],
+      body: pedidos.map(i => [i.nome, i.categoria, pedido(i)]),
+      headStyles: { fillColor: [46, 125, 50], halign: 'center' },
+      columnStyles: { 1: { cellWidth: 40 }, 2: { cellWidth: 40, halign: 'center', fontStyle: 'bold' } }
+    });
+  }
+  doc.save(`conferencia_${agora.toISOString().slice(0, 10)}_${hora.replace(':', 'h')}.pdf`);
+}
+document.getElementById('btnPdf').onclick = gerarPdf;
+render();
+</script>
+</body>
+</html>
